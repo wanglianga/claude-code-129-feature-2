@@ -1,6 +1,6 @@
 import type {
-  CostumeRecord, Enrollment, Member, MusicVersion, Notice, Photo,
-  Program, Rehearsal, Room, RoomBooking, Segment, Team, FormationLog,
+  CostumeRecord, CostumeStock, Enrollment, Member, MusicVersion, Notice, Photo,
+  Program, Rehearsal, Room, RoomBooking, Segment, SizeShortage, Team, FormationLog,
 } from './types'
 
 // ============ 队伍 ============
@@ -191,7 +191,11 @@ const cos = (
   extra: Partial<CostumeRecord> = {},
 ): CostumeRecord => ({
   memberId, programId, size, deposit: 100, depositPaid: true,
-  pickedUp: false, pickedUpBy: '', returned: false, sizeIssue: '', ...extra,
+  pickedUp: false, pickedUpBy: '', returned: false, sizeIssue: '',
+  originalSize: size, tryOnPhotos: [], wantedSize: '',
+  stockChecked: false, stockAvailable: false, stockNote: '',
+  resolution: '', resolvedAt: '', backup: null,
+  ...extra,
 })
 
 export const costumes: CostumeRecord[] = [
@@ -200,23 +204,61 @@ export const costumes: CostumeRecord[] = [
   cos('m3', 'p1', 'M', { pickedUp: true, pickedUpBy: '本人' }),
   cos('m4', 'p1', 'XL'),
   cos('m5', 'p1', 'S', { pickedUp: true, pickedUpBy: '本人' }),
-  cos('m6', 'p1', 'L', { sizeIssue: 'L码偏紧，下蹲时腰部勒，申请换XL' }),
+  // 赵淑珍领取 L 后试穿偏小：已拍试穿照片、登记原尺码与期望 XL，服装负责人确认 XL 无货，等待队长决策
+  cos('m6', 'p1', 'L', {
+    pickedUp: true, pickedUpBy: '本人',
+    sizeIssue: 'L码偏紧，下蹲时腰部勒，申请换XL',
+    wantedSize: 'XL',
+    tryOnPhotos: [
+      { id: 'tp1', emoji: '🤏', caption: '腋下与腰部紧绷，抬臂困难', at: '2026-09-26 20:05' },
+      { id: 'tp2', emoji: '📏', caption: '试穿正面照，衣长偏短', at: '2026-09-26 20:06' },
+    ],
+    stockChecked: true, stockAvailable: false,
+    stockNote: '仓库 XL 仅剩备用服，无可换常规库存（09-26 盘点）',
+  }),
   cos('m7', 'p1', 'M'),
   cos('m8', 'p1', 'XL', { pickedUp: true, pickedUpBy: '本人' }),
   cos('m9', 'p1', 'XXL', { pickedUp: true, pickedUpBy: '吴强（儿子）代领' }),
   cos('m10', 'p1', 'S', { pickedUp: true, pickedUpBy: '本人' }),
   cos('m11', 'p1', 'M'),
   cos('m12', 'p1', 'L', { depositPaid: false }),
-  // 已归档节目：全部归还、押金已退
+  // 已归档节目：全部归还、押金已退；m16 当时 XL 缺货启用过备用服装（备用服也已归还）
   cos('m13', 'p3', 'L', { pickedUp: true, pickedUpBy: '本人', returned: true }),
   cos('m14', 'p3', 'M', { pickedUp: true, pickedUpBy: '本人', returned: true }),
   cos('m15', 'p3', 'M', { pickedUp: true, pickedUpBy: '女儿代领', returned: true }),
-  cos('m16', 'p3', 'XL', { pickedUp: true, pickedUpBy: '本人', returned: true }),
+  cos('m16', 'p3', 'XL', {
+    pickedUp: true, pickedUpBy: '本人', returned: true,
+    resolution: 'backup', resolvedAt: '2026-09-16 18:30',
+    backup: {
+      size: 'XL', deposit: 80, depositPaid: true,
+      cleaningDuty: '队里统一送洗（备用服回收）',
+      returnBy: '2026-09-18 12:00 前',
+      returned: true, returnedAt: '2026-09-18 10:20',
+      note: '演出前 XL 缺货，启用队部备用 XL 一套',
+    },
+  }),
   // 演出当天节目：服装已发
   cos('m13', 'p4', 'L', { pickedUp: true, pickedUpBy: '本人' }),
   cos('m14', 'p4', 'M', { pickedUp: true, pickedUpBy: '本人' }),
   cos('m15', 'p4', 'M', { pickedUp: true, pickedUpBy: '本人' }),
   cos('m16', 'p4', 'XL', { pickedUp: true, pickedUpBy: '黄丽（女儿）代领' }),
+]
+
+// ============ 各节目各尺码可换库存（服装负责人盘点确认） ============
+export const costumeStocks: CostumeStock[] = [
+  { programId: 'p1', size: 'S',   exchangeable: 2, checked: true, note: '柜 A-1', checkedAt: '2026-09-26 17:00' },
+  { programId: 'p1', size: 'M',   exchangeable: 3, checked: true, note: '柜 A-2', checkedAt: '2026-09-26 17:00' },
+  { programId: 'p1', size: 'L',   exchangeable: 1, checked: true, note: '柜 A-3', checkedAt: '2026-09-26 17:00' },
+  { programId: 'p1', size: 'XL',  exchangeable: 0, checked: true, note: '仅剩备用服 1 套，常规可换库存为 0', checkedAt: '2026-09-26 17:00' },
+  { programId: 'p1', size: 'XXL', exchangeable: 1, checked: true, note: '柜 A-5', checkedAt: '2026-09-26 17:00' },
+]
+
+// ============ 尺码紧缺记录（服装负责人据此看长期紧缺尺码） ============
+export const sizeShortages: SizeShortage[] = [
+  { id: 'ss1', programId: 'p3', size: 'XL', memberId: 'm16', reason: 'backup_used', note: '中秋演出前 XL 缺货，启用备用 XL', at: '2026-09-16 18:30' },
+  { id: 'ss2', programId: 'p4', size: 'XL', memberId: 'm16', reason: 'oos_exchange', note: '补发时 XL 仍紧张，从外队临时借调', at: '2026-09-28 16:00' },
+  { id: 'ss3', programId: 'p1', size: 'XL', memberId: 'm6', reason: 'oos_exchange', note: '《丰收锣鼓》盘点 XL 可换库存为 0', at: '2026-09-26 17:10' },
+  { id: 'ss4', programId: 'p4', size: 'M', memberId: 'm14', reason: 'oos_exchange', note: 'M 码一度仅剩 1 件，已补货', at: '2026-09-27 10:00' },
 ]
 
 // ============ 排练室（多支队伍共用） ============

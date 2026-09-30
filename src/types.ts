@@ -150,6 +150,30 @@ export interface Rehearsal {
 
 // ============ 服装 ============
 
+/** 试穿照片（无后端环境，用 emoji 占位实拍图，附说明与时间） */
+export interface TryOnPhoto {
+  id: string
+  emoji: string            // 如 📏👕🤏
+  caption: string          // 如「腋下紧绷，抬臂困难」
+  at: string
+}
+
+/** 尺码返换的最终处置方式 */
+// exchanged：换到合适新码；backup：启用备用服装；reposition：无衣可换，队长调整站位
+export type ExchangeResolution = 'exchanged' | 'backup' | 'reposition'
+
+/** 启用备用服装后重新登记的押金 / 清洗 / 归还信息 */
+export interface BackupCostume {
+  size: CostumeSize
+  deposit: number            // 备用服装押金
+  depositPaid: boolean
+  cleaningDuty: string       // 清洗责任人（本人 / 家属 / 队里统一送洗）
+  returnBy: string           // 要求归还时间
+  returned: boolean
+  returnedAt: string         // 实际归还时间
+  note: string
+}
+
 export interface CostumeRecord {
   memberId: string
   programId: string
@@ -160,7 +184,48 @@ export interface CostumeRecord {
   pickedUpBy: string       // 领取人；家属代领时写家属姓名+关系
   returned: boolean
   sizeIssue: string        // 尺码不合适说明，空串表示无问题
+
+  // —— 尺码返换闭环 ——
+  originalSize: CostumeSize          // 领取时的原尺码
+  tryOnPhotos: TryOnPhoto[]          // 试穿照片
+  wantedSize: CostumeSize | ''       // 希望换到的尺码
+  stockChecked: boolean              // 服装负责人是否已确认可换库存
+  stockAvailable: boolean            // 确认结果：目标尺码是否有可换库存
+  stockNote: string                  // 库存确认说明
+  resolution: '' | ExchangeResolution // 最终处置；空串表示尚未处置
+  resolvedAt: string
+  backup: BackupCostume | null       // 启用备用服装后的重录信息
 }
+
+/** 某节目各尺码的可换库存盘点（服装负责人维护、确认） */
+export interface CostumeStock {
+  programId: string
+  size: CostumeSize
+  exchangeable: number      // 可换库存件数
+  checked: boolean          // 是否已盘点确认
+  note: string
+  checkedAt: string
+}
+
+/** 尺码紧缺记录：确认无货 / 启用备用 / 调站位各累计一条，供服装负责人看长期紧缺 */
+export interface SizeShortage {
+  id: string
+  programId: string
+  size: CostumeSize        // 紧缺的尺码
+  memberId: string
+  reason: 'oos_exchange' | 'backup_used' | 'reposition'
+  note: string
+  at: string
+}
+
+export const SHORTAGE_REASON_LABEL: Record<SizeShortage['reason'], string> = {
+  oos_exchange: '确认无货可换',
+  backup_used: '启用备用服装',
+  reposition: '调整站位将就',
+}
+
+/** 累计达到该次数即视为“长期紧缺”尺码 */
+export const SHORTAGE_LONGTERM_THRESHOLD = 2
 
 // ============ 排练室（多支队伍共用） ============
 

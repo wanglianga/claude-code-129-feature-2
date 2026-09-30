@@ -58,14 +58,34 @@ export default function Archive() {
           </div>
 
           <div className="card">
-            <h3>服装归还</h3>
+            <h3>服装归还 <span className="sub">含尺码返换与备用服装记录</span></h3>
             <table className="tbl">
+              <thead>
+                <tr><th>队员</th><th>原码→现码</th><th>返换处置</th><th>备用服装 / 押金 / 清洗 / 归还</th><th>归还</th></tr>
+              </thead>
               <tbody>
                 {myCostumes.map((c) => (
                   <tr key={c.memberId}>
                     <td><b>{nameOf(c.memberId)}</b></td>
-                    <td>{c.size}码</td>
-                    <td>{c.returned ? <span className="badge green">已归还 · 押金已退</span> : <span className="badge red">未归还</span>}</td>
+                    <td>{c.originalSize !== c.size
+                      ? <span><span className="badge gray">{c.originalSize}</span> → <span className="badge green">{c.size}</span></span>
+                      : <span>{c.size}码</span>}</td>
+                    <td>{c.resolution === 'exchanged' ? <span className="badge green">换货</span>
+                      : c.resolution === 'backup' ? <span className="badge blue">备用服</span>
+                      : c.resolution === 'reposition' ? <span className="badge gold">调站位</span>
+                      : <span className="muted">正常</span>}</td>
+                    <td style={{ fontSize: 13 }}>
+                      {c.backup ? (
+                        <div>
+                          {c.backup.size}码备用服 · 押金¥{c.backup.deposit}（{c.backup.depositPaid ? '已交' : '未交'}）<br />
+                          清洗：{c.backup.cleaningDuty}<br />
+                          归还时限：{c.backup.returnBy}
+                        </div>
+                      ) : <span className="muted">—</span>}
+                    </td>
+                    <td>{c.returned
+                      ? <span className="badge green">已归还{c.backup?.returnedAt ? ` ${c.backup.returnedAt.slice(5)}` : ''} · 押金已退</span>
+                      : <span className="badge red">未归还</span>}</td>
                   </tr>
                 ))}
               </tbody>

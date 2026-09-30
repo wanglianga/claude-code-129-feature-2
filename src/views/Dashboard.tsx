@@ -1,11 +1,13 @@
-import { useStore, stageDone, absentSet } from '../store'
+import { useStore, stageDone, absentSet, awaitingDecision, shortageStats } from '../store'
 import { PIPELINE, STAGE_LABEL } from '../types'
 import { useHelpers } from '../helpers'
 
 export default function Dashboard() {
+  const role = useStore((s) => s.role)
   const programs = useStore((s) => s.programs)
   const rehearsals = useStore((s) => s.rehearsals)
   const costumes = useStore((s) => s.costumes)
+  const shortages = useStore((s) => s.sizeShortages)
   const onsite = useStore((s) => s.onsite)
   const notices = useStore((s) => s.notices)
   const members = useStore((s) => s.members)
@@ -14,6 +16,10 @@ export default function Dashboard() {
   const urgent = notices.filter((n) => n.level === 'urgent')
   const sizeIssues = costumes.filter((c) => c.sizeIssue)
   const unpaid = costumes.filter((c) => !c.depositPaid && programs.some((p) => p.id === c.programId && p.stage !== 'archived'))
+  const activeProgramIds = new Set(programs.filter((p) => p.stage !== 'archived').map((p) => p.id))
+  const oosDecision = awaitingDecision(costumes).filter((c) => activeProgramIds.has(c.programId))
+  const longShort = shortageStats(shortages).filter((s) => s.longTerm)
+  const canSeeCostume = role === 'leader' || role === 'costume'
 
   return (
     <div>
@@ -21,6 +27,19 @@ export default function Dashboard() {
       {urgent.length > 0 && urgent.map((n) => (
         <div key={n.id} className="alert red">⚠ {n.text}</div>
       ))}
+
+      {/* 尺码返换预警：确认无货待队长决策 / 长期紧缺尺码 */}
+      {canSeeCostume && oosDecision.length > 0 && (
+        <div className="alert red">
+          尺码返换：{oosDecision.map((c) => `${nameOf(c.memberId)}（${c.wantedSize || c.size}码）`).join('、')} 已确认无货可换，
+          演出前请队长尽快<b>调整站位</b>或<b>启用备用服装</b>（押金、清洗责任、归还时间需重新记录）。
+        </div>
+      )}
+      {canSeeCostume && longShort.length > 0 && (
+        <div className="alert gold">
+          长期紧缺尺码：{longShort.map((s) => `${s.size}码（累计${s.count}次）`).join('、')}，建议服装负责人提前补货采购。
+        </div>
+      )}
 
       <div className="grid3">
         <div className="card">
@@ -33,7 +52,7 @@ export default function Dashboard() {
         <div className="card">
           <h3>服装待处理</h3>
           <div style={{ fontSize: 30, fontWeight: 800, color: 'var(--gold)' }}>{sizeIssues.length + unpaid.length}</div>
-          <div className="muted">{sizeIssues.length} 件尺码问题 · {unpaid.length} 人未交押金</div>
+          <div className="muted">{sizeIssues.length} 件尺码问题{oosDecision.length > 0 ? `（${oosDecision.length} 件缺货待决策）` : ''} · {unpaid.length} 人未交押金</div>
         </div>
         <div className="card">
           <h3>健康关注</h3>
