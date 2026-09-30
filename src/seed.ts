@@ -1,5 +1,5 @@
 import type {
-  CostumeRecord, Enrollment, Member, MusicVersion, Notice, Photo,
+  CostumeRecord, CostumeStock, Enrollment, Member, MusicVersion, Notice, Photo,
   Program, Rehearsal, Room, RoomBooking, Segment, Team, FormationLog,
 } from './types'
 
@@ -185,38 +185,77 @@ export const rehearsals: Rehearsal[] = [
   },
 ]
 
-// ============ 服装（押金/代领/尺码问题/归还） ============
+// ============ 服装（押金/代领/尺码返换/备用服/归还） ============
 const cos = (
   memberId: string, programId: string, size: CostumeRecord['size'],
   extra: Partial<CostumeRecord> = {},
 ): CostumeRecord => ({
-  memberId, programId, size, deposit: 100, depositPaid: true,
-  pickedUp: false, pickedUpBy: '', returned: false, sizeIssue: '', ...extra,
+  memberId, programId, size,
+  deposit: 100, depositStatus: 'held', depositPaid: true,
+  pickedUp: false, pickedUpBy: '', pickedUpAt: '',
+  returned: false, returnedAt: '', sizeIssue: '',
+  originalSize: size, tryOnPhoto: '', tryOnNote: '',
+  exchangeStatus: '', wantedSize: '', exchangeAt: '', exchangedAt: '',
+  fallback: '', fallbackNote: '',
+  backupEnabled: false, backupEnabledAt: '', backupSize: '',
+  backupDeposit: 0, backupDepositStatus: 'unpaid',
+  cleaningOwner: '', cleaningDone: false, backupReturned: false, backupReturnedAt: '',
+  ...extra,
 })
 
 export const costumes: CostumeRecord[] = [
-  cos('m1', 'p1', 'M', { pickedUp: true, pickedUpBy: '本人' }),
-  cos('m2', 'p1', 'L', { pickedUp: true, pickedUpBy: '本人' }),
-  cos('m3', 'p1', 'M', { pickedUp: true, pickedUpBy: '本人' }),
+  cos('m1', 'p1', 'M', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-25 19:00' }),
+  cos('m2', 'p1', 'L', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-25 19:02' }),
+  cos('m3', 'p1', 'M', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-25 19:05' }),
   cos('m4', 'p1', 'XL'),
-  cos('m5', 'p1', 'S', { pickedUp: true, pickedUpBy: '本人' }),
-  cos('m6', 'p1', 'L', { sizeIssue: 'L码偏紧，下蹲时腰部勒，申请换XL' }),
+  cos('m5', 'p1', 'S', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-25 19:08' }),
+  // 演出前仍未换到合适尺码（L→XL，XL 无货），押金仍保管、等待队长处置
+  cos('m6', 'p1', 'L', {
+    pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-26 18:30',
+    originalSize: 'L', tryOnPhoto: '👖', tryOnNote: '试穿照：腰部紧绷、裤长偏短，下蹲受限',
+    sizeIssue: 'L码偏紧，下蹲时腰部勒，申请换XL',
+    exchangeStatus: 'unresolved', wantedSize: 'XL', exchangeAt: '2026-09-26 18:40',
+  }),
   cos('m7', 'p1', 'M'),
-  cos('m8', 'p1', 'XL', { pickedUp: true, pickedUpBy: '本人' }),
-  cos('m9', 'p1', 'XXL', { pickedUp: true, pickedUpBy: '吴强（儿子）代领' }),
-  cos('m10', 'p1', 'S', { pickedUp: true, pickedUpBy: '本人' }),
+  cos('m8', 'p1', 'XL', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-25 19:12' }),
+  cos('m9', 'p1', 'XXL', { pickedUp: true, pickedUpBy: '吴强（儿子）代领', pickedUpAt: '2026-09-26 09:20' }),
+  // 已完成换货：原 S 偏小 → 换到 M（原尺码保留用于紧缺统计）
+  cos('m10', 'p1', 'M', {
+    pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-25 19:15',
+    originalSize: 'S', tryOnPhoto: '👕', tryOnNote: '试穿照：S 码肩部太紧、抬臂受限',
+    exchangeStatus: 'exchanged', wantedSize: 'M', exchangeAt: '2026-09-25 19:20', exchangedAt: '2026-09-27 16:00',
+  }),
   cos('m11', 'p1', 'M'),
-  cos('m12', 'p1', 'L', { depositPaid: false }),
+  cos('m12', 'p1', 'L', { depositStatus: 'unpaid', depositPaid: false }),
   // 已归档节目：全部归还、押金已退
-  cos('m13', 'p3', 'L', { pickedUp: true, pickedUpBy: '本人', returned: true }),
-  cos('m14', 'p3', 'M', { pickedUp: true, pickedUpBy: '本人', returned: true }),
-  cos('m15', 'p3', 'M', { pickedUp: true, pickedUpBy: '女儿代领', returned: true }),
-  cos('m16', 'p3', 'XL', { pickedUp: true, pickedUpBy: '本人', returned: true }),
+  cos('m13', 'p3', 'L', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-12 19:00', returned: true, returnedAt: '2026-09-18 10:00', depositStatus: 'refunded' }),
+  cos('m14', 'p3', 'M', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-12 19:02', returned: true, returnedAt: '2026-09-18 10:02', depositStatus: 'refunded' }),
+  cos('m15', 'p3', 'M', { pickedUp: true, pickedUpBy: '女儿代领', pickedUpAt: '2026-09-12 19:05', returned: true, returnedAt: '2026-09-18 10:05', depositStatus: 'refunded' }),
+  // 已归档：演出前 XXL 无货 → 队长启用备用服；演出后备用服归还+清洗完成，原押金结转抵扣、备用服押金已退
+  cos('m16', 'p3', 'XL', {
+    pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-12 19:08', returned: true, returnedAt: '2026-09-18 10:08',
+    originalSize: 'XL', tryOnPhoto: '🧥', tryOnNote: '试穿照：XL 胸口偏紧、转身受限',
+    sizeIssue: 'XL偏紧申请XXL，演出前XXL无货',
+    exchangeStatus: 'backup', wantedSize: 'XXL', exchangeAt: '2026-09-13 20:00',
+    fallback: 'backup', fallbackNote: '演出前XXL无货：队长启用备用服装顶替，黄德海同步调至后排居中位。',
+    depositStatus: 'forfeited',
+    backupEnabled: true, backupEnabledAt: '2026-09-14 18:00', backupSize: 'XXL',
+    backupDeposit: 100, backupDepositStatus: 'refunded',
+    cleaningOwner: '服装组·周阿姨', cleaningDone: true,
+    backupReturned: true, backupReturnedAt: '2026-09-18 10:10',
+  }),
   // 演出当天节目：服装已发
-  cos('m13', 'p4', 'L', { pickedUp: true, pickedUpBy: '本人' }),
-  cos('m14', 'p4', 'M', { pickedUp: true, pickedUpBy: '本人' }),
-  cos('m15', 'p4', 'M', { pickedUp: true, pickedUpBy: '本人' }),
-  cos('m16', 'p4', 'XL', { pickedUp: true, pickedUpBy: '黄丽（女儿）代领' }),
+  cos('m13', 'p4', 'L', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-30 17:30' }),
+  cos('m14', 'p4', 'M', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-30 17:32' }),
+  cos('m15', 'p4', 'M', { pickedUp: true, pickedUpBy: '本人', pickedUpAt: '2026-09-30 17:35' }),
+  cos('m16', 'p4', 'XL', { pickedUp: true, pickedUpBy: '黄丽（女儿）代领', pickedUpAt: '2026-09-30 17:40' }),
+]
+
+// ============ 各节目可换库存（服装负责人维护并确认） ============
+export const costumeStocks: CostumeStock[] = [
+  { programId: 'p1', stock: { S: 0, M: 1, L: 0, XL: 0, XXL: 1 }, confirmed: true, confirmedAt: '2026-09-27 17:00', confirmedBy: '服装负责人·周敏' },
+  { programId: 'p3', stock: { S: 0, M: 0, L: 0, XL: 0, XXL: 0 }, confirmed: true, confirmedAt: '2026-09-18 10:30', confirmedBy: '服装负责人·周敏' },
+  { programId: 'p4', stock: { S: 0, M: 0, L: 0, XL: 0, XXL: 0 }, confirmed: true, confirmedAt: '2026-09-30 17:00', confirmedBy: '服装负责人·周敏' },
 ]
 
 // ============ 排练室（多支队伍共用） ============
@@ -239,6 +278,8 @@ export const notices: Notice[] = [
   { id: 'n3', programId: 'p1', text: '《丰收锣鼓》曲目已更新为 V3 演出版（4′00″），请音响师替换播放文件，队员按新版本合练。', level: 'info', targets: ['sound', 'leader', 'member'], at: '2026-09-22 15:45', kind: 'general' },
   { id: 'n4', programId: null, text: '下次活动预告：10月15日重阳节慰问演出开始报名，请各队队长统计参加人数。', level: 'info', targets: ['leader', 'member'], at: '2026-09-23 10:00', kind: 'next' },
   { id: 'n5', programId: 'p4', text: '请1号节目《张灯结彩》演员到东侧候场区集合，志愿者注意搀扶黄德海老师。', level: 'urgent', targets: ['leader', 'volunteer', 'member'], at: '2026-10-01 18:40', kind: 'live' },
+  { id: 'n6', programId: 'p1', text: '尺码返换：赵淑珍领取的 L 码偏小、需换 XL，但 XL 可换库存为 0，演出前若仍无货请队长调整站位或启用备用服装（押金状态同步更新）。', level: 'urgent', targets: ['costume', 'leader'], at: '2026-09-26 18:42', kind: 'size' },
+  { id: 'n7', programId: 'p3', text: '备用服装已为黄德海启用（XXL）：原 XL 押金结转抵扣，备用服押金另收 100 元；清洗责任人服装组·周阿姨，演出后已于 09-18 归还并退押金。', level: 'info', targets: ['costume', 'leader'], at: '2026-09-14 18:05', kind: 'backup' },
 ]
 
 // ============ 现场照片（归档节目） ============

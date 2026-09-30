@@ -1,8 +1,9 @@
 import { create } from 'zustand'
 import type {
-  CheckinStatus, CostumeRecord, CostumeSize, Enrollment, FormationLog,
+  CheckinStatus, CostumeRecord, CostumeSize, CostumeStock, DepositStatus, Enrollment, FormationLog,
   Member, Notice, Photo, Program, Rehearsal, Role, Room, RoomBooking, Stage, Team,
 } from './types'
+import { activeDeposit, exchangeOpen } from './costume'
 import * as seed from './seed'
 
 let seq = 100
@@ -24,6 +25,7 @@ interface State {
   enrollments: Enrollment[]
   rehearsals: Rehearsal[]
   costumes: CostumeRecord[]
+  costumeStocks: CostumeStock[]
   rooms: Room[]
   bookings: RoomBooking[]
   notices: Notice[]
@@ -57,8 +59,27 @@ interface State {
   payDeposit: (memberId: string, programId: string) => void
   pickupCostume: (memberId: string, programId: string, byWho: string) => void
   returnCostume: (memberId: string, programId: string) => void
-  reportSizeIssue: (memberId: string, programId: string, issue: string) => void
-  resolveSizeIssue: (memberId: string, programId: string, newSize: CostumeSize) => void
+  /** 领取后发现尺码偏小：记录试穿照片、原尺码、领取人与期望尺码，生成返换单 */
+  reportSizeIssue: (memberId: string, programId: string, issue: string, wantedSize: CostumeSize, photo: string) => void
+  /** 兼容旧接口的简化上报（无照片/期望尺码） */
+  reportSizeIssueSimple: (memberId: string, programId: string, issue: string) => void
+  /** 服装负责人核对可换库存后标记“可换/无货” */
+  markExchangeStock: (memberId: string, programId: string, available: boolean) => void
+  /** 换到合适尺码：扣减库存、更新尺码与押金状态 */
+  exchangeCostume: (memberId: string, programId: string, newSize: CostumeSize) => string | null
+  /** 演出前换不到：队长处置——调整站位（生成走位记录+通知） */
+  resolveByFormation: (memberId: string, programId: string, note: string) => void
+  /** 演出前换不到：队长处置——启用备用服装（押金/清洗/归还重新记录） */
+  enableBackup: (memberId: string, programId: string, backupSize: CostumeSize, deposit: number, cleaningOwner: string) => string | null
+  /** 备用服押金收取 / 归还退押金 */
+  payBackupDeposit: (memberId: string, programId: string) => void
+  returnBackup: (memberId: string, programId: string) => void
+  setCleaningDone: (memberId: string, programId: string, done: boolean) => void
+
+  // 服装库存（服装负责人确认）
+  initStock: (programId: string) => void
+  setStock: (programId: string, size: CostumeSize, qty: number) => void
+  confirmStock: (programId: string, by: string) => void
 
   // 文化站
   reviewProgram: (programId: string, result: 'approved' | 'changes_requested' | 'rejected', comment: string, by: string) => void
@@ -86,6 +107,7 @@ export const useStore = create<State>((set, get) => ({
   enrollments: seed.enrollments,
   rehearsals: seed.rehearsals,
   costumes: seed.costumes,
+  costumeStocks: seed.costumeStocks,
   rooms: seed.rooms,
   bookings: seed.bookings,
   notices: seed.notices,
@@ -114,8 +136,15 @@ export const useStore = create<State>((set, get) => ({
       enrollments: [...s.enrollments, { memberId, programId, costumeSize: size, joinFormal, healthNotes, availableSlots: slots, enrolledAt: now() }],
       programs: s.programs.map((p) => p.id === programId ? { ...p, memberIds: [...p.memberIds, memberId] } : p),
       costumes: [...s.costumes, {
-        memberId, programId, size, deposit: 100, depositPaid: false,
-        pickedUp: false, pickedUpBy: '', returned: false, sizeIssue: '',
+        memberId, programId, size, deposit: 100, depositStatus: 'unpaid', depositPaid: false,
+        pickedUp: false, pickedUpBy: '', pickedUpAt: '',
+        returned: false, returnedAt: '', sizeIssue: '',
+        originalSize: size, tryOnPhoto: '', tryOnNote: '',
+        exchangeStatus: '', wantedSize: '', exchangeAt: '', exchangedAt: '',
+        fallback: '', fallbackNote: '',
+        backupEnabled: false, backupEnabledAt: '', backupSize: '',
+        backupDeposit: 0, backupDepositStatus: 'unpaid',
+        cleaningOwner: '', cleaningDone: false, backupReturned: false, backupReturnedAt: '',
       }],
       members: s.members.map((x) => x.id === memberId ? { ...x, healthNotes: healthNotes || x.healthNotes, availableSlots: slots.length ? slots : x.availableSlots } : x),
     }
@@ -207,29 +236,184 @@ export const useStore = create<State>((set, get) => ({
   })),
 
   payDeposit: (memberId, programId) => set((s) => ({
-    costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId ? { ...c, depositPaid: true } : c),
+    costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId
+      ? { ...c, depositPaid: true, depositStatus: 'held' as DepositStatus } : c),
   })),
 
   pickupCostume: (memberId, programId, byWho) => set((s) => ({
-    costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId ? { ...c, pickedUp: true, pickedUpBy: byWho } : c),
+    costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId
+      ? { ...c, pickedUp: true, pickedUpBy: byWho, pickedUpAt: now() } : c),
   })),
 
   returnCostume: (memberId, programId) => set((s) => ({
-    costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId ? { ...c, returned: true } : c),
+    costumes: s.costumes.map((c) => {
+      if (c.memberId !== memberId || c.programId !== programId) return c
+      // 原服归还：仍在保管的押金予以退还；已结转抵扣（启用备用服）的不退
+      const depositStatus: DepositStatus = c.depositStatus === 'held' ? 'refunded' : c.depositStatus
+      return { ...c, returned: true, returnedAt: now(), depositStatus }
+    }),
   })),
 
-  reportSizeIssue: (memberId, programId, issue) => set((s) => ({
-    costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId ? { ...c, sizeIssue: issue } : c),
-    notices: [...s.notices, {
-      id: nid('n'), programId, level: 'info' as const, kind: 'costume' as const, at: now(),
-      targets: ['costume', 'leader'] as Role[],
-      text: `尺码问题：${s.members.find((m) => m.id === memberId)?.name} — ${issue}`,
+  reportSizeIssue: (memberId, programId, issue, wantedSize, photo) => set((s) => {
+    const name = s.members.find((m) => m.id === memberId)?.name ?? memberId
+    return {
+      costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId ? {
+        ...c,
+        sizeIssue: issue,
+        originalSize: c.originalSize || c.size,
+        tryOnPhoto: photo,
+        wantedSize, exchangeStatus: 'reported' as const, exchangeAt: now(),
+      } : c),
+      notices: [...s.notices, {
+        id: nid('n'), programId, level: 'info' as const, kind: 'size' as const, at: now(),
+        targets: ['costume', 'leader'] as Role[],
+        text: `尺码返换登记：${name} 领取的 ${s.costumes.find((x) => x.memberId === memberId && x.programId === programId)?.size} 码试穿偏小（${photo || '未附照片'}），期望换 ${wantedSize || '待核定'} 码；请服装负责人核对可换库存。`,
+      }],
+    }
+  }),
+
+  reportSizeIssueSimple: (memberId, programId, issue) =>
+    get().reportSizeIssue(memberId, programId, issue, '' as CostumeSize, ''),
+
+  markExchangeStock: (memberId, programId, available) => set((s) => {
+    const c0 = s.costumes.find((x) => x.memberId === memberId && x.programId === programId)
+    const name = s.members.find((m) => m.id === memberId)?.name ?? memberId
+    if (!c0) return s
+    if (available) {
+      return {
+        costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId
+          ? { ...c, exchangeStatus: 'exchanging' as const } : c),
+        notices: [...s.notices, {
+          id: nid('n'), programId, level: 'info' as const, kind: 'size' as const, at: now(),
+          targets: ['costume', 'leader'] as Role[],
+          text: `可换库存已核对：${name} 需要的 ${c0.wantedSize} 码有货，可安排换领（押金状态不变）。`,
+        }],
+      }
+    }
+    return {
+      costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId
+        ? { ...c, exchangeStatus: 'unresolved' as const } : c),
+      notices: [...s.notices, {
+        id: nid('n'), programId, level: 'urgent' as const, kind: 'size' as const, at: now(),
+        targets: ['costume', 'leader'] as Role[],
+        text: `演出前 ${name} 需要的 ${c0.wantedSize} 码仍无货：请队长尽快调整站位，或启用备用服装（押金状态将同步更新）。`,
+      }],
+    }
+  }),
+
+  exchangeCostume: (memberId, programId, newSize) => {
+    const s = get()
+    const stock = s.costumeStocks.find((x) => x.programId === programId)
+    const qty = stock?.stock[newSize] ?? 0
+    if (qty <= 0) return `可换库存中没有 ${newSize} 码，请先由服装负责人补库存或改用备用服装`
+    const name = s.members.find((m) => m.id === memberId)?.name ?? memberId
+    const c0 = s.costumes.find((x) => x.memberId === memberId && x.programId === programId)
+    set((st) => ({
+      costumeStocks: st.costumeStocks.map((x) => x.programId === programId
+        ? { ...x, stock: { ...x.stock, [newSize]: Math.max(0, (x.stock[newSize] ?? 0) - 1) }, confirmed: false } : x),
+      costumes: st.costumes.map((c) => c.memberId === memberId && c.programId === programId ? {
+        ...c, size: newSize, exchangeStatus: 'exchanged' as const, exchangedAt: now(),
+        sizeIssue: '', fallback: '', fallbackNote: '',
+        depositStatus: 'held' as DepositStatus, depositPaid: true,
+      } : c),
+      enrollments: st.enrollments.map((e) => e.memberId === memberId && e.programId === programId
+        ? { ...e, costumeSize: newSize } : e),
+      notices: [...st.notices, {
+        id: nid('n'), programId, level: 'info' as const, kind: 'size' as const, at: now(),
+        targets: ['costume', 'leader', 'member'] as Role[],
+        text: `${name} 已由 ${c0?.originalSize ?? c0?.size} 码换到 ${newSize} 码，原押金继续保管（演出后归还退还）。`,
+      }],
+    }))
+    return null
+  },
+
+  resolveByFormation: (memberId, programId, note) => set((s) => {
+    const c0 = s.costumes.find((x) => x.memberId === memberId && x.programId === programId)
+    const name = s.members.find((m) => m.id === memberId)?.name ?? memberId
+    return {
+      costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId
+        ? { ...c, exchangeStatus: 'repositioned' as const, fallback: 'formation' as const, fallbackNote: note } : c),
+      formationLogs: [...s.formationLogs, {
+        id: nid('fl'), programId, at: now(),
+        text: `${name} 因服装尺码偏小（${c0?.originalSize ?? c0?.size}→${c0?.wantedSize || '?'} 演出前无货）调整站位：${note}`,
+      }],
+      notices: [...s.notices, {
+        id: nid('n'), programId, level: 'urgent' as const, kind: 'size' as const, at: now(),
+        targets: ['leader', 'member', 'costume'] as Role[],
+        text: `队长已为 ${name} 调整站位以规避尺码问题（${note}）；其原服押金仍处保管状态，演出后归还再退。`,
+      }],
+    }
+  }),
+
+  enableBackup: (memberId, programId, backupSize, deposit, cleaningOwner) => {
+    const s = get()
+    const c0 = s.costumes.find((x) => x.memberId === memberId && x.programId === programId)
+    if (!c0 || !c0.exchangeStatus || c0.exchangeStatus === 'exchanged') {
+      return '该队员没有进行中的尺码返换，无需启用备用服'
+    }
+    const name = s.members.find((m) => m.id === memberId)?.name ?? memberId
+    set((st) => ({
+      costumes: st.costumes.map((c) => c.memberId === memberId && c.programId === programId ? {
+        ...c,
+        exchangeStatus: 'backup' as const, fallback: 'backup' as const,
+        fallbackNote: `演出前${c.wantedSize}码无货，队长启用${backupSize}码备用服装顶替。`,
+        backupEnabled: true, backupEnabledAt: now(), backupSize,
+        backupDeposit: deposit, backupDepositStatus: (deposit > 0 ? 'held' : 'unpaid') as DepositStatus,
+        cleaningOwner, cleaningDone: false, backupReturned: false, backupReturnedAt: '',
+        // 原服押金结转抵扣，不再退原押金
+        depositStatus: 'forfeited' as DepositStatus, depositPaid: true,
+      } : c),
+      notices: [...st.notices, {
+        id: nid('n'), programId, level: 'urgent' as const, kind: 'backup' as const, at: now(),
+        targets: ['costume', 'leader', 'member'] as Role[],
+        text: `已为 ${name} 启用 ${backupSize} 码备用服装：原 ${c0.originalSize} 码押金 ¥${c0.deposit} 结转抵扣；备用服押金 ¥${deposit} 重新计收、清洗责任 ${cleaningOwner || '待指定'}，归还时间演出后登记。`,
+      }],
+    }))
+    return null
+  },
+
+  payBackupDeposit: (memberId, programId) => set((s) => ({
+    costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId && c.backupEnabled
+      ? { ...c, backupDepositStatus: 'held' as DepositStatus } : c),
+  })),
+
+  returnBackup: (memberId, programId) => set((s) => ({
+    costumes: s.costumes.map((c) => {
+      if (c.memberId !== memberId || c.programId !== programId || !c.backupEnabled) return c
+      const backupDepositStatus: DepositStatus = c.backupDepositStatus === 'held' ? 'refunded' : c.backupDepositStatus
+      return { ...c, backupReturned: true, backupReturnedAt: now(), backupDepositStatus }
+    }),
+  })),
+
+  setCleaningDone: (memberId, programId, done) => set((s) => ({
+    costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId && c.backupEnabled
+      ? { ...c, cleaningDone: done } : c),
+  })),
+
+  initStock: (programId) => set((s) => (s.costumeStocks.some((x) => x.programId === programId) ? s : {
+    costumeStocks: [...s.costumeStocks, {
+      programId, stock: { S: 0, M: 0, L: 0, XL: 0, XXL: 0 },
+      confirmed: false, confirmedAt: '', confirmedBy: '',
     }],
   })),
 
-  resolveSizeIssue: (memberId, programId, newSize) => set((s) => ({
-    costumes: s.costumes.map((c) => c.memberId === memberId && c.programId === programId ? { ...c, size: newSize, sizeIssue: '' } : c),
-    enrollments: s.enrollments.map((e) => e.memberId === memberId && e.programId === programId ? { ...e, costumeSize: newSize } : e),
+  setStock: (programId, size, qty0) => set((s) => ({
+    costumeStocks: s.costumeStocks.map((x) => {
+      if (x.programId !== programId) return x
+      const qty = Math.max(0, Math.floor(qty0) || 0)
+      // 数字改动后需重新确认，保证“已确认”对应当前数字
+      return { ...x, stock: { ...x.stock, [size]: qty }, confirmed: false, confirmedAt: '', confirmedBy: '' }
+    }),
+  })),
+
+  confirmStock: (programId, by) => set((s) => ({
+    costumeStocks: s.costumeStocks.map((x) => x.programId === programId
+      ? { ...x, confirmed: true, confirmedAt: now(), confirmedBy: by || '服装负责人' } : x),
+    notices: [...s.notices, {
+      id: nid('n'), programId, level: 'info' as const, kind: 'costume' as const, at: now(),
+      targets: ['costume', 'leader'] as Role[],
+      text: `服装负责人已核对确认《${s.programs.find((p) => p.id === programId)?.title ?? ''}》各尺码可换库存。`,
+    }],
   })),
 
   reviewProgram: (programId, result, comment, by) => set((s) => ({
@@ -319,11 +503,16 @@ export function placedSet(p: Program): Set<string> {
 }
 
 /** 各阶段是否完成（文化站连续性视角） */
-export function stageDone(p: Program, rehearsals: Rehearsal[], costumes: CostumeRecord[], onsite: Record<string, Record<string, boolean>>): Record<string, boolean> {
+export function stageDone(p: Program, rehearsals: Rehearsal[], costumes: CostumeRecord[], onsite: Record<string, Record<string, boolean>>, stocks: CostumeStock[] = []): Record<string, boolean> {
   const hasCheckin = rehearsals.some((r) => r.programId === p.id && Object.keys(r.checkins).length > 0)
   const placed = placedSet(p).size
   const myCostumes = costumes.filter((c) => c.programId === p.id)
-  const costumeOk = myCostumes.length > 0 && myCostumes.every((c) => !c.sizeIssue)
+  // 服装环节：没有进行中的返换单（待报/待换/演出前无货均算未闭环；换到、调站位、备用顶替算闭环）
+  const exchangeClosed = myCostumes.every((c) => c.exchangeStatus === '' || c.exchangeStatus === 'exchanged' || c.exchangeStatus === 'backup' || c.exchangeStatus === 'repositioned')
+  // 已建立库存表的节目，要求服装负责人已确认；尚无库存表（如报名阶段）不拦截
+  const stockRow = stocks.find((x) => x.programId === p.id)
+  const stockOk = !stockRow || stockRow.confirmed
+  const costumeOk = myCostumes.length > 0 && exchangeClosed && stockOk
   const lastReview = p.reviews[p.reviews.length - 1]
   return {
     signup: p.memberIds.length > 0,
@@ -333,6 +522,38 @@ export function stageDone(p: Program, rehearsals: Rehearsal[], costumes: Costume
     review: lastReview?.result === 'approved',
     showday: Object.keys(onsite[p.id] ?? {}).length > 0,
   }
+}
+
+export interface CostumeReadiness {
+  total: number
+  unpaid: number          // 押金未收
+  unpicked: number        // 未领取
+  openExchange: number    // 进行中的返换（待核库存/待换/无货）
+  pendingFallback: number // 演出前换不到、待队长处置
+  backupOpen: number      // 备用服已启用但未归还或未清洗
+  unreturned: number      // 演出后仍未归还（原服）
+  ready: boolean
+}
+
+/** 服装就绪情况（总览/队长用） */
+export function costumeReadiness(programId: string, costumes: CostumeRecord[]): CostumeReadiness {
+  const list = costumes.filter((c) => c.programId === programId)
+  const unpaid = list.filter((c) => c.depositStatus === 'unpaid').length
+  const unpicked = list.filter((c) => !c.pickedUp).length
+  const openExchange = list.filter((c) => exchangeOpen(c)).length
+  const pendingFallbackCount = list.filter((c) => c.exchangeStatus === 'unresolved').length
+  const backupOpenCount = list.filter((c) => c.backupEnabled && (!c.backupReturned || !c.cleaningDone)).length
+  const unreturned = list.filter((c) => c.pickedUp && !c.returned && !c.backupEnabled).length
+  return {
+    total: list.length, unpaid, unpicked, openExchange,
+    pendingFallback: pendingFallbackCount, backupOpen: backupOpenCount, unreturned,
+    ready: unpaid === 0 && unpicked === 0 && openExchange === 0,
+  }
+}
+
+/** 当前生效押金（启用备用服后取备用服押金），供视图统一展示 */
+export function depositView(c: CostumeRecord) {
+  return activeDeposit(c)
 }
 
 /** 老年/健康关注队员 */

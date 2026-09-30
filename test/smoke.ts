@@ -1,4 +1,5 @@
 import { useStore, absentSet, placedSet, stageDone } from '../src/store'
+import { activeDeposit, sizeShortages } from '../src/costume'
 
 let pass = 0, fail = 0
 const assert = (cond: boolean, msg: string) => {
@@ -51,17 +52,70 @@ assert(useStore.getState().programs.find((p) => p.id === 'p1')!.stage === 'rehea
 s.reviewProgram('p1', 'approved', '通过', '文化站·陈老师')
 assert(useStore.getState().programs.find((p) => p.id === 'p1')!.stage === 'ready', '审查通过后待演出')
 
-console.log('7. 服装流程：收押金 → 家属代领 → 上报尺码问题 → 换货 → 归还')
+console.log('7. 服装流程：收押金 → 家属代领 → 试穿偏小上报(照片/原尺码) → 库存换货 → 归还退押金')
 s.payDeposit('m2', 'p2')
 s.pickupCostume('m2', 'p2', '吴强（儿子）代领')
 let cc = useStore.getState().costumes.find((x) => x.memberId === 'm2' && x.programId === 'p2')!
 assert(cc.depositPaid && cc.pickedUp && cc.pickedUpBy.includes('儿子'), '押金收取、家属代领登记')
-s.reportSizeIssue('m2', 'p2', 'L码偏紧')
-s.resolveSizeIssue('m2', 'p2', 'XL')
+s.reportSizeIssue('m2', 'p2', 'L码偏紧下蹲勒', 'XL', '👖')
 cc = useStore.getState().costumes.find((x) => x.memberId === 'm2' && x.programId === 'p2')!
-assert(cc.size === 'XL' && cc.sizeIssue === '', '换货更新尺码并清除问题')
+assert(cc.exchangeStatus === 'reported' && cc.originalSize === 'L' && cc.wantedSize === 'XL' && cc.tryOnPhoto === '👖', '记录试穿照片、原尺码 L、期望 XL')
+// 无库存时换领被拦截
+s.initStock('p2')
+assert(s.exchangeCostume('m2', 'p2', 'XL') !== null, '可换库存为 0 时禁止换领')
+s.setStock('p2', 'XL', 1)
+assert(useStore.getState().costumeStocks.find((x) => x.programId === 'p2')!.confirmed === false, '改动库存后需重新确认')
+s.markExchangeStock('m2', 'p2', true)
+cc = useStore.getState().costumes.find((x) => x.memberId === 'm2' && x.programId === 'p2')!
+assert(cc.exchangeStatus === 'exchanging', '服装负责人核对有货 → 待换领')
+assert(s.exchangeCostume('m2', 'p2', 'XL') === null, '有货时换领成功')
+cc = useStore.getState().costumes.find((x) => x.memberId === 'm2' && x.programId === 'p2')!
+const st2 = useStore.getState().costumeStocks.find((x) => x.programId === 'p2')!
+assert(cc.size === 'XL' && cc.originalSize === 'L' && cc.exchangeStatus === 'exchanged' && cc.sizeIssue === '', '换到 XL，原尺码 L 保留，问题清除')
+assert(st2.stock.XL === 0, '换领扣减可换库存')
+assert(cc.depositStatus === 'held', '换货后原押金继续保管')
+s.confirmStock('p2', '服装负责人·周敏')
+assert(useStore.getState().costumeStocks.find((x) => x.programId === 'p2')!.confirmed, '服装负责人确认库存')
 s.returnCostume('m2', 'p2')
-assert(useStore.getState().costumes.find((x) => x.memberId === 'm2' && x.programId === 'p2')!.returned, '归还登记')
+cc = useStore.getState().costumes.find((x) => x.memberId === 'm2' && x.programId === 'p2')!
+assert(cc.returned && !!cc.returnedAt && cc.depositStatus === 'refunded', '原服归还登记时间并退押金')
+
+console.log('7b. 演出前无货 → 队长启用备用服：押金结转、清洗责任与归还时间重记')
+s.enroll('p2', 'm7', 'S', true, '', [])
+s.payDeposit('m7', 'p2'); s.pickupCostume('m7', 'p2', '本人')
+s.reportSizeIssue('m7', 'p2', 'S码肩紧抬臂受限', 'M', '👕')
+s.markExchangeStock('m7', 'p2', false)
+let c5 = useStore.getState().costumes.find((x) => x.memberId === 'm7' && x.programId === 'p2')!
+assert(c5.exchangeStatus === 'unresolved', '演出前 M 无货 → 待队长处置')
+assert(useStore.getState().notices.some((n) => n.kind === 'size' && n.level === 'urgent'), '生成尺码紧缺紧急通知')
+assert(s.enableBackup('m7', 'p2', 'M', 100, '服装组·周阿姨') === null, '启用备用服成功')
+c5 = useStore.getState().costumes.find((x) => x.memberId === 'm7' && x.programId === 'p2')!
+assert(c5.backupEnabled && c5.backupSize === 'M' && c5.exchangeStatus === 'backup', '备用服启用、尺码重记')
+assert(c5.depositStatus === 'forfeited', '原 S 服押金结转抵扣')
+assert(activeDeposit(c5).status === 'held' && activeDeposit(c5).amount === 100, '当前生效押金切换为备用服押金（保管中）')
+assert(c5.cleaningOwner === '服装组·周阿姨' && !c5.backupReturned, '清洗责任人记录、备用服待归还')
+assert(useStore.getState().notices.some((n) => n.kind === 'backup'), '生成备用服装通知')
+s.setCleaningDone('m7', 'p2', true)
+s.returnBackup('m7', 'p2')
+c5 = useStore.getState().costumes.find((x) => x.memberId === 'm7' && x.programId === 'p2')!
+assert(c5.cleaningDone && c5.backupReturned && !!c5.backupReturnedAt && c5.backupDepositStatus === 'refunded', '备用服清洗完成、归还时间与退押金重记')
+
+console.log('7c. 演出前无货 → 队长调整站位（押金仍保管）')
+s.enroll('p2', 'm8', 'M', true, '', [])
+s.payDeposit('m8', 'p2'); s.pickupCostume('m8', 'p2', '本人')
+s.reportSizeIssue('m8', 'p2', 'M码偏小', 'L', '🧥')
+s.markExchangeStock('m8', 'p2', false)
+s.resolveByFormation('m8', 'p2', '调至后排居中，减少下蹲动作')
+const c3 = useStore.getState().costumes.find((x) => x.memberId === 'm8' && x.programId === 'p2')!
+assert(c3.exchangeStatus === 'repositioned' && c3.fallback === 'formation' && c3.depositStatus === 'held', '调整站位处置闭环、押金仍保管')
+assert(useStore.getState().formationLogs.some((l) => l.programId === 'p2' && l.text.includes('尺码偏小')), '生成走位调整记录')
+
+console.log('7d. 长期紧缺尺码派生')
+const short = sizeShortages(useStore.getState().programs, useStore.getState().costumes, useStore.getState().costumeStocks)
+assert(short.some((x) => x.size === 'XL' && x.gap >= 1), 'XL 长期紧缺（赵淑珍等待换、库存 0）')
+assert(short.some((x) => x.size === 'L' && x.gap >= 1), 'L 出现紧缺缺口（演出前无货改调站位）')
+const mRow = short.find((x) => x.size === 'M')!
+assert(mRow.reports >= 2 && mRow.gap === 0, 'M 累计上报含已换到(郑爱华)，库存可覆盖时缺口为 0')
 
 console.log('8. 排练室冲突拦截')
 assert(s.bookRoom('room1', 't2', '2026-09-28', '周一 19:00–20:30', '冲突测试') !== null, '同时段同室被拦截')

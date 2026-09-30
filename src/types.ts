@@ -41,6 +41,24 @@ export const PIPELINE: Stage[] = ['signup', 'rehearsing', 'positioning', 'costum
 export type CostumeSize = 'S' | 'M' | 'L' | 'XL' | 'XXL'
 export const SIZES: CostumeSize[] = ['S', 'M', 'L', 'XL', 'XXL']
 
+/** 押金状态机：未收 → 已收 → 演出后归还无损 → 已退；启用备用服时原押金转为结转，备用服押金另立 */
+export type DepositStatus = 'unpaid' | 'held' | 'forfeited' | 'refunded'
+export const DEPOSIT_LABEL: Record<DepositStatus, string> = {
+  unpaid: '未收押金',
+  held: '押金已收·保管中',
+  forfeited: '押金抵扣（备用服启用）',
+  refunded: '已退押金',
+}
+
+/** 尺码返换单状态 */
+export type ExchangeStatus =
+  | 'reported'     // 已上报尺码偏小，待核对可换库存
+  | 'exchanging'   // 已锁定库存、等待换领
+  | 'exchanged'    // 已换到合适尺码
+  | 'unresolved'   // 演出前仍未换到合适尺码，待队长处置
+  | 'repositioned' // 队长已调整站位处置
+  | 'backup'       // 已启用备用服装顶替
+
 // ============ 队员 ============
 
 export interface Member {
@@ -155,11 +173,54 @@ export interface CostumeRecord {
   programId: string
   size: CostumeSize
   deposit: number          // 押金金额
-  depositPaid: boolean
+  /** 押金状态（随领取/换货/启用备用服/归还联动） */
+  depositStatus: DepositStatus
+  depositPaid: boolean     // 兼容派生：是否已交押金（= depositStatus !== 'unpaid'）
   pickedUp: boolean
   pickedUpBy: string       // 领取人；家属代领时写家属姓名+关系
+  pickedUpAt: string       // 领取时间
   returned: boolean
+  returnedAt: string       // 归还时间
   sizeIssue: string        // 尺码不合适说明，空串表示无问题
+
+  // —— 尺码返换（领取后发现偏小）——
+  /** 领取时登记/试穿的原尺码（换货后保留，便于统计长期紧缺） */
+  originalSize: CostumeSize
+  /** 试穿照片（emoji 占位，模拟上传） */
+  tryOnPhoto: string
+  tryOnNote: string
+  /** 返换单状态；空串表示从未发起返换 */
+  exchangeStatus: ExchangeStatus | ''
+  /** 返换目标（期望）尺码 */
+  wantedSize: CostumeSize | ''
+  exchangeAt: string      // 发起返换时间
+  exchangedAt: string     // 换到合适尺码时间
+  /** 演出前仍换不到时队长的处置方式 */
+  fallback: '' | 'formation' | 'backup'
+  fallbackNote: string
+
+  // —— 备用服装（被启用顶替后，押金 / 清洗责任 / 归还时间重新记录）——
+  backupEnabled: boolean
+  backupEnabledAt: string
+  backupSize: CostumeSize | ''
+  backupDeposit: number
+  backupDepositStatus: DepositStatus
+  /** 备用服清洗责任人 */
+  cleaningOwner: string
+  cleaningDone: boolean
+  backupReturned: boolean
+  backupReturnedAt: string
+}
+
+/** 某节目下每个尺码的可换库存（服装负责人维护并确认） */
+export interface CostumeStock {
+  programId: string
+  /** size -> 可换套数 */
+  stock: Partial<Record<CostumeSize, number>>
+  /** 服装负责人是否已核对确认库存 */
+  confirmed: boolean
+  confirmedAt: string
+  confirmedBy: string
 }
 
 // ============ 排练室（多支队伍共用） ============
@@ -187,7 +248,7 @@ export interface Notice {
   level: 'info' | 'urgent'
   targets: Role[]          // 面向哪些角色
   at: string
-  kind: 'general' | 'health' | 'venue' | 'costume' | 'live' | 'next'
+  kind: 'general' | 'health' | 'venue' | 'costume' | 'size' | 'backup' | 'live' | 'next'
 }
 
 // ============ 演出档案 ============

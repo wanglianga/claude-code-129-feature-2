@@ -7,6 +7,7 @@ export default function Culture() {
   const programs = useStore((s) => s.programs)
   const rehearsals = useStore((s) => s.rehearsals)
   const costumes = useStore((s) => s.costumes)
+  const stocks = useStore((s) => s.costumeStocks)
   const onsite = useStore((s) => s.onsite)
   const rooms = useStore((s) => s.rooms)
   const bookings = useStore((s) => s.bookings)
@@ -31,7 +32,7 @@ export default function Culture() {
       </div>
 
       {active.map((p) => {
-        const done = stageDone(p, rehearsals, costumes, onsite)
+        const done = stageDone(p, rehearsals, costumes, onsite, stocks)
         const curIdx = PIPELINE.indexOf(p.stage)
         const broken = PIPELINE.slice(0, curIdx).some((st) => !done[st])
         const lastReview = p.reviews[p.reviews.length - 1]

@@ -58,14 +58,37 @@ export default function Archive() {
           </div>
 
           <div className="card">
-            <h3>服装归还</h3>
+            <h3>服装归还 · 押金 · 备用服</h3>
             <table className="tbl">
+              <thead>
+                <tr><th>队员</th><th>尺码（原→现）</th><th>原服押金</th><th>备用服（押金/清洗/归还）</th><th>状态</th></tr>
+              </thead>
               <tbody>
                 {myCostumes.map((c) => (
                   <tr key={c.memberId}>
                     <td><b>{nameOf(c.memberId)}</b></td>
-                    <td>{c.size}码</td>
-                    <td>{c.returned ? <span className="badge green">已归还 · 押金已退</span> : <span className="badge red">未归还</span>}</td>
+                    <td>{c.size !== c.originalSize
+                      ? <span>{c.originalSize} → <b style={{ color: 'var(--green)' }}>{c.size}</b></span>
+                      : <span>{c.size}</span>}</td>
+                    <td>
+                      {c.depositStatus === 'refunded' && <span className="badge green">已退 ¥{c.deposit}</span>}
+                      {c.depositStatus === 'forfeited' && <span className="badge blue">结转抵扣 ¥{c.deposit}</span>}
+                      {c.depositStatus === 'held' && <span className="badge gold">保管中 ¥{c.deposit}</span>}
+                      {c.depositStatus === 'unpaid' && <span className="badge red">未收</span>}
+                    </td>
+                    <td style={{ fontSize: 13 }}>
+                      {c.backupEnabled ? (
+                        <>
+                          <div>备用 {c.backupSize} 码 · 押金 ¥{c.backupDeposit}
+                            {c.backupDepositStatus === 'refunded' ? '（已退）' : c.backupDepositStatus === 'held' ? '（保管中）' : '（未收）'}</div>
+                          <div className="muted">清洗：{c.cleaningOwner}{c.cleaningDone ? ' · 已清洗' : ' · 未清洗'}</div>
+                          <div className="muted">归还：{c.backupReturned ? c.backupReturnedAt : '未归还'}</div>
+                        </>
+                      ) : <span className="muted">未启用</span>}
+                    </td>
+                    <td>{c.returned
+                      ? <span className="badge green">原服已还{c.returnedAt ? ` ${c.returnedAt.slice(5)}` : ''}</span>
+                      : <span className="badge red">未归还</span>}</td>
                   </tr>
                 ))}
               </tbody>
